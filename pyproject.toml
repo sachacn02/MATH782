@@ -3,10 +3,11 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "my_package"
+name = "islp_selection"
 version = "0.1.0"
 dependencies = [
     "hydra-core>=1.3.2",
+    "ISLP"
 ]
 
 [project.optional-dependencies]
