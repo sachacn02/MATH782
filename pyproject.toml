@@ -7,7 +7,12 @@ name = "islp_selection"
 version = "0.1.0"
 dependencies = [
     "hydra-core>=1.3.2",
-    "ISLP"
+    "ISLP",
+    "l0bnb",
+    "plotly",
+    "scikit-learn",
+    "scipy", 
+    "seaborn",
 ]
 
 [project.optional-dependencies]
