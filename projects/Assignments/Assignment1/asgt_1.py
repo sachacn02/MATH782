@@ -9,14 +9,22 @@ import numpy as np
 ## Preliminary Data Pre-processing
 # Imports
 import pandas as pd
+import plotly.graph_objects as go
+import plotly.offline as pyo
 import seaborn as sns
+import statsmodels.api as sm
+from ISLP import load_data
+from ISLP.models import Column, Feature, ModelSpec, build_columns, summarize
 from sklearn import preprocessing
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import cross_val_score
 
+pyo.init_notebook_mode(connected=True)
+
 # %%
 data = pd.read_csv("data/Assignment1_Question1.csv")
 data.head()
+print(data.head().to_latex(index=True, float_format="%.3f"))
 
 # %%
 data.describe()
@@ -56,6 +64,7 @@ sns.heatmap(
 )
 plt.title("Correlation Matrix", pad=15)
 plt.show()
+
 
 # %%
 
@@ -102,59 +111,6 @@ def fit_all_models(X=X, y=y):
 
 
 # %%
-results = fit_all_models(X, y)
-
-
-# %%
-def plot_SSR_vs_dimension(X=X, y=y):
-    results = fit_all_models(X, y)
-    ssr_by_dimension = {k: {"SSRs": []} for k in range(X.shape[1] + 1)}
-
-    for key, value in results.items():
-        ssr_by_dimension[value["dimension"]]["SSRs"].append(value["SSR"])
-
-    dimensions, mean_SSRs, std_SSRs, min_SSRs, max_SSRs = [], [], [], [], []
-
-    for dim, ssr_dict in ssr_by_dimension.items():
-        if not ssr_dict["SSRs"]:
-            continue
-        dimensions.append(dim)
-        mean_SSRs.append(np.mean(ssr_dict["SSRs"]))
-        std_SSRs.append(np.std(ssr_dict["SSRs"]))
-        min_SSRs.append(np.min(ssr_dict["SSRs"]))
-        max_SSRs.append(np.max(ssr_dict["SSRs"]))
-
-    plt.figure(figsize=(10, 6))
-
-    plt.errorbar(
-        dimensions,
-        mean_SSRs,
-        yerr=std_SSRs,
-        fmt="-o",
-        color="blue",
-        ecolor="orange",
-        elinewidth=2,
-        capsize=5,
-        label="Mean ± Std",
-    )
-
-    plt.plot(dimensions, min_SSRs, color="green", marker="o", label="Min SSR", zorder=3)
-    plt.scatter(
-        dimensions, max_SSRs, color="red", marker="o", label="Max SSR", zorder=3
-    )
-
-    plt.title("SSR vs Dimension of Model")
-    plt.xlabel("Dimension of Model (Number of Features)")
-    plt.ylabel("Sum of Squared Residuals (SSR)")
-    plt.xticks(range(max(dimensions) + 1))
-    plt.legend()
-    plt.grid(True, linestyle="--", alpha=0.6)
-    plt.show()
-
-
-plot_SSR_vs_dimension()
-import numpy as np
-import plotly.graph_objects as go
 
 
 def plot_SSR_vs_dimension(X=X, y=y):
@@ -224,36 +180,51 @@ def plot_SSR_vs_dimension(X=X, y=y):
     )
 
     fig.show()
+    return fig
 
 
+fig = plot_SSR_vs_dimension(X, y)
+fig.write_html("results/SSR_vs_dimension.html")  # Save the figure as an HTML file
 # %%
-
-import plotly.offline as pyo
-
-pyo.init_notebook_mode(connected=True)
-plot_SSR_vs_dimension()
-
-# %%
-# The (best) SSR is reduced substantially when adding a dimension, up to $d = 3$. After that, the SSR goes down very slightly, up to $d = 7$. Yielding the full model (compared to using 7 dimensions) barely decreases.
-# The results suggest that we could select a 3-features model, which seems to be the best trade off between model parcimony and explaining power.
-
 ## 1.2 - Forward, Backward and Stepwise Selection
+from functools import partial
+
 from sklearn.feature_selection import SequentialFeatureSelector
 
+
+def nCp(sigma2, estimator, X, Y):
+    "Negative Cp statistic"
+    n, p = X.shape
+    Yhat = estimator.predict(X)
+    RSS = np.sum((Y - Yhat) ** 2)
+    return -(RSS + 2 * p * sigma2) / n
+
+
+def sigma_2(X=X, Y=y):
+    reg = LinearRegression()
+    scaler = preprocessing.StandardScaler().fit(X)
+    X_scaled = scaler.transform(X)  # Standardize the features
+    n_features = X_scaled.shape[1]
+    reg.fit(X_scaled, Y)
+    residuals = Y - reg.predict(X_scaled)
+    return np.sum(residuals**2) / (len(Y) - n_features - 1)  # degrees of freedom
+
+
+sigma2 = sigma_2()
+sigma2
+
+neg_cp = partial(nCp, sigma2)
+# %%
 sfs_forward = SequentialFeatureSelector(
     estimator=LinearRegression(),
     n_features_to_select="auto",
     direction="forward",
-    cv=5,
-    scoring="neg_mean_squared_error",  # MSE
 )
 
 sfs_backward = SequentialFeatureSelector(
     estimator=LinearRegression(),
     n_features_to_select="auto",
     direction="backward",
-    cv=5,
-    scoring="neg_mean_squared_error",  # MSE
 )
 
 
@@ -267,10 +238,10 @@ def select_best_model_sfs(X=X, y=y, sfs=sfs_forward):
     return selected_features
 
 
+# %%
 sfs_forward = select_best_model_sfs(X, y, sfs_forward)
 # 1. Extract the selected features
 X_selected_forward = X_scaled[:, X.columns.isin(sfs_forward)]
-
 # %%
 
 sfs_backward = select_best_model_sfs(X, y, sfs_backward)
@@ -278,7 +249,7 @@ X_selected_backward = X_scaled[:, X.columns.isin(sfs_backward)]
 
 
 # %%
-def select_best_model_stepwise(X=X, y=y, cv=5):
+def select_best_model_stepwise(X=X, y=y):
     scaler = preprocessing.StandardScaler().fit(X)
     X_scaled_df = pd.DataFrame(scaler.transform(X), columns=X.columns)
     selected_features = []
@@ -293,7 +264,6 @@ def select_best_model_stepwise(X=X, y=y, cv=5):
                 LinearRegression(),
                 X_scaled_df[candidate_features],
                 y,
-                cv=cv,
                 scoring="neg_mean_squared_error",
             ).mean()
 
@@ -316,7 +286,6 @@ def select_best_model_stepwise(X=X, y=y, cv=5):
                     LinearRegression(),
                     X_scaled_df[candidate_features],
                     y,
-                    cv=cv,
                     scoring="neg_mean_squared_error",
                 ).mean()
 
@@ -438,11 +407,13 @@ def plot_ssr_history(ssr_history, method_name="FSLR"):
         template="plotly_white",
     )
     fig.show()
+    return fig
 
 
 # %%
 
-plot_ssr_history(ssr_history, method_name="FSLR")
+fig = plot_ssr_history(ssr_history, method_name="FSLR")
+fig.write_html("results/FSLR_SSR_history_100.html")  # Save the figure as an HTML file
 
 # The plot suggests that we could stop the iterations, using for example a zero tolerance.abs
 
@@ -458,7 +429,8 @@ print("Selected features (FSLR):", selected_features_fslr)
 print("Number of iterations", len(ssr_history) - 1)
 
 # %%
-plot_ssr_history(ssr_history, method_name="FSLR with tol=0")
+fig = plot_ssr_history(ssr_history, method_name="FSLR with tol=0")
+fig.write_html("results/FSLR_SSR_history_tol_0.html")  # Save the figure as an HTML file
 
 
 # %%
@@ -517,9 +489,8 @@ selected_features_l2 = [
 ]
 print("Selected features (L2):", selected_features_l2)
 print("Number of iterations", len(ssr_history) - 1)
-
-# %%
-plot_ssr_history(ssr_history, method_name="L2 Boosting")
+fig = plot_ssr_history(ssr_history, method_name="L2 Boosting")
+fig.write_html("results/L2_SSR_history_0.html")  # Save the figure as an HTML file
 # %%
 l2_coefficients, l2_intercept, ssr_history = l2_boosting(
     X, y, nu=nu, iterations=iterations, tol=0.1
@@ -529,8 +500,11 @@ selected_features_l2 = [
 ]
 print("Selected features (L2):", selected_features_l2)
 print("Number of iterations", len(ssr_history) - 1)
+fig = plot_ssr_history(ssr_history, method_name="L2 Boosting with tol = 0.1")
+fig.write_html("results/L2_SSR_history_tol_0.1.html")  # Save the figure as an HTML file
 # %%
-plot_ssr_history(ssr_history, method_name="L2 Boosting with tol = 0.1")
+
+
 # %% Question 2
 # Each row is one simulated sample; each column is one observation.
 from sklearn.model_selection import KFold
@@ -565,13 +539,16 @@ def generate_response_samples(R, n, filename, random_state=None):
 
 
 # %%
-def fit_all_models_criteria(X_design, y, cv=(5, 10)):
+def fit_all_models_criteria(
+    X_design, y, cv=(5, 10), *, cv_shuffle=False, cv_random_state=None
+):
     """Score all predictor subsets, always fitting an intercept.
 
     X_design contains predictors only. Feature tuples use zero-based indices.
     CV is leave-one-out CV, computed exactly from OLS residuals and leverage.
-    CV_d uses d fixed, contiguous folds, shared by all candidate models and
-    all response samples. Scores are mean squared errors over observations.
+    CV_d uses d fixed folds, shared by all candidate models. By default the
+    folds are contiguous; cv_shuffle=True makes a reproducible random split
+    when cv_random_state is supplied. Scores are mean squared errors.
     Set cv=None to omit the additional fold-based scores.
     """
     X_design = np.asarray(X_design, dtype=float)
@@ -598,7 +575,14 @@ def fit_all_models_criteria(X_design, y, cv=(5, 10)):
 
     fold_counts = () if cv is None else ((cv,) if isinstance(cv, int) else tuple(cv))
     folds = {
-        d: list(KFold(n_splits=d, shuffle=False).split(X_design)) for d in fold_counts
+        d: list(
+            KFold(
+                n_splits=d,
+                shuffle=cv_shuffle,
+                random_state=cv_random_state if cv_shuffle else None,
+            ).split(X_design)
+        )
+        for d in fold_counts
     }
     model_results = {}
     for k in range(n_features + 1):
@@ -727,3 +711,97 @@ for rho, design_name in [(0.0, "I"), (0.5, "II"), (0.75, "III")]:
 for rho, table in selection_tables.items():
     print(f"Correlation rho = {rho}; {R} samples of {n} observations")
     print(table.to_string())
+
+# %%
+
+
+# Question 3
+def analyze_temperature_submodels(temperature_data, cv_seed=42):
+    """Score every intercept-containing subset and summarize the six criteria."""
+    predictors = ("Latitude_x1", "Longitude_x2", "Altitude_x3")
+    required = ("Cities", "Temp_y", *predictors)
+    missing = [name for name in required if name not in temperature_data.columns]
+    if missing:
+        raise ValueError(f"Question 3 data are missing columns: {missing}")
+    if temperature_data.loc[:, list(required)].isna().any().any():
+        raise ValueError("Question 3 data contain missing values.")
+
+    X_temperature = temperature_data.loc[:, list(predictors)].to_numpy(dtype=float)
+    y_temperature = temperature_data["Temp_y"].to_numpy(dtype=float)
+    criteria = ("Mallows_Cp", "AIC", "BIC", "CV", "GCV", "CV_5")
+    scores = fit_all_models_criteria(
+        X_temperature,
+        y_temperature,
+        cv=(5,),
+        cv_shuffle=True,
+        cv_random_state=cv_seed,
+    )
+
+    def model_name(features):
+        return "1" + "".join(f" + x{index + 1}" for index in features)
+
+    rows = []
+    for features, result in scores.items():
+        rows.append(
+            {
+                "Model": model_name(features),
+                "Covariates": ", ".join(predictors[index] for index in features)
+                or "(intercept only)",
+                "k": len(features),
+                **{criterion: result[criterion] for criterion in criteria},
+            }
+        )
+    model_table = pd.DataFrame(rows).set_index("Model")
+
+    winners = {}
+    for criterion in criteria:
+        winners[criterion] = min(
+            scores,
+            key=lambda features: (
+                scores[features][criterion],
+                len(features),
+                features,
+            ),
+        )
+    winner_table = pd.DataFrame(
+        [
+            {
+                "Criterion": criterion,
+                "Selected model": model_name(winners[criterion]),
+                "Value": scores[winners[criterion]][criterion],
+            }
+            for criterion in criteria
+        ]
+    ).set_index("Criterion")
+
+    # All six criteria agree for these data. If the data change, use LOOCV
+    # as the fallback predictive criterion and inspect the disagreement.
+    final_features = winners["CV"]
+    final_design = np.column_stack(
+        (np.ones(len(y_temperature)), X_temperature[:, list(final_features)])
+    )
+    coefficients = np.linalg.lstsq(final_design, y_temperature, rcond=None)[0]
+    final_coefficients = pd.Series(
+        coefficients,
+        index=("Intercept",) + tuple(predictors[index] for index in final_features),
+        name="coefficient",
+    )
+    return model_table, winner_table, final_features, final_coefficients
+
+
+temperature_data = pd.read_csv("data/Assignment1_Question3.csv")
+
+q3_model_table, q3_winner_table, q3_final_features, q3_final_coefficients = (
+    analyze_temperature_submodels(temperature_data)
+)
+
+print(q3_model_table.round(4).to_string())
+print("\nBest model by criterion:")
+print(q3_winner_table.round(4).to_string())
+q3_model_table.to_csv("results/Question3_model_scores.csv")
+q3_winner_table.to_csv("results/Question3_winners.csv")
+print("\nFinal selected model: 1" + "".join(f" + x{i + 1}" for i in q3_final_features))
+
+# %%
+print(q3_model_table.to_latex(index=True, float_format="%.3f"))
+# %%
